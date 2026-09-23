@@ -195,10 +195,6 @@
         <CuratedResourceSection />
       </section>
 
-      <!-- 豆瓣新片榜（搜索时隐藏，用 v-show 保留已加载数据） -->
-      <section v-show="!searched" class="douban-hot-section">
-        <DoubanHot @search="quickSearch" />
-      </section>
     </main>
 
     <footer class="site-footer">
@@ -221,7 +217,6 @@
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import SearchBox from "./components/SearchBox.vue";
 import ResultGroup from "./components/ResultGroup.vue";
-import DoubanHot from "./components/DoubanHot.vue";
 import TransferStatusDialog from "./components/TransferStatusDialog.vue";
 import HotKeywordSection from "./components/HotKeywordSection.vue";
 import CuratedResourceSection from "./components/CuratedResourceSection.vue";
