@@ -37,34 +37,24 @@
     </div>
 
     <main class="main">
-      <!-- 英雄区 + 热搜 -->
-      <div class="hero-row">
-        <div class="hero-noise" aria-hidden="true"></div>
-        <header class="hero">
-          <div class="hero-accent" aria-hidden="true"></div>
-          <div class="hero-content">
-            <div class="hero-badge">PanHub 搜索聚合引擎</div>
-            <h1 class="hero-title">
-              <span class="hero-title-line">一键检索</span>
-              <span class="hero-title-line hero-title-line--accent">全网网盘资源</span>
-            </h1>
-            <p class="hero-description">
-              聚合阿里云盘、夸克、百度网盘、115、迅雷等平台 · 快速、直达、少打扰
-            </p>
-            <ul class="hero-features" role="list">
-              <li class="hero-feature">实时聚合</li>
-              <li class="hero-feature">多平台覆盖</li>
-              <li class="hero-feature">结果去重</li>
-            </ul>
-          </div>
-          <div class="hero-shape" aria-hidden="true"></div>
-        </header>
-        <aside class="hero-aside">
-          <ErrorBoundary message="热搜加载失败">
-            <HotSearchSection ref="hotSearchRef" :on-search="quickSearch" />
-          </ErrorBoundary>
-        </aside>
-      </div>
+      <!-- 品牌区（对齐官方站 2026-09-22 三改）：居中一行「logo + 站名」，
+           下面一句描述，无卡片、无渐变底。搜索站的首屏只需要回答"这是谁、干什么"，
+           剩下的交给下面的搜索框 -->
+      <header class="hero">
+        <div class="hero-lockup">
+          <img
+            class="hero-logo"
+            :src="LOGO_URL"
+            alt=""
+            width="48"
+            height="48"
+            aria-hidden="true" />
+          <h1 class="hero-brand">PanHub 网盘搜索</h1>
+        </div>
+        <!-- 注意 span 之间不能换行：Vue 会吃掉元素之间仅含空白的换行文本节点，
+             分隔符会跟前后文字黏在一起；间距一律由 .hero-tagline__sep 的 margin 给 -->
+        <p class="hero-tagline"><span>10000000+ 网盘资源免费无偿分享</span><span class="hero-tagline__sep" aria-hidden="true">·</span><span class="hero-tagline__platforms">聚合夸克、百度、迅雷、UC、移动等网盘，</span><span>坚持做最全的网盘搜索引擎</span></p>
+      </header>
 
       <SearchBox
         v-model="kw"
@@ -169,11 +159,11 @@
               <p>试试其他关键词，或稍后再试</p>
             </div>
           </div>
-          <div v-if="hotTerms.length > 0" class="empty-suggestions">
-            <span class="empty-suggestions__label">大家都在搜：</span>
+          <div v-if="emptySuggestions.length > 0" class="empty-suggestions">
+            <span class="empty-suggestions__label">试试这些：</span>
             <div class="empty-suggestions__tags">
               <button
-                v-for="term in hotTerms"
+                v-for="term in emptySuggestions"
                 :key="term"
                 class="empty-suggestions__tag"
                 @click="quickSearch(term)">
@@ -188,6 +178,21 @@
       <section v-if="error" class="error-alert">
         <span class="error-icon">⚠️</span>
         <span>{{ error }}</span>
+      </section>
+
+      <!-- 推荐关键词快搜（对齐官方站 2026-09-22）：搜索时隐藏。
+           词表由官方站后台「热门关键词」配置下发（/api/hot-keywords），
+           组件挂载时拉一次 -->
+      <!-- v-show 而非 v-if：v-if 搜索时会销毁组件，重置回首页后重新挂载
+           （多拉一次词表、入场动画重放）；v-show 保留组件与已取到的词表 -->
+      <section v-show="!searched" class="hot-keyword-wrap">
+        <HotKeywordSection :on-search="quickSearch" />
+      </section>
+
+      <!-- 网盘资源精选（对齐官方站 2026-09-22）：官方站后台维护的固定资源，
+           点开直接跳分享页由用户自己保存（不转存）。搜索时隐藏 -->
+      <section v-show="!searched" class="curated-wrap">
+        <CuratedResourceSection />
       </section>
 
       <!-- 豆瓣新片榜（搜索时隐藏，用 v-show 保留已加载数据） -->
@@ -218,14 +223,15 @@ import SearchBox from "./components/SearchBox.vue";
 import ResultGroup from "./components/ResultGroup.vue";
 import DoubanHot from "./components/DoubanHot.vue";
 import TransferStatusDialog from "./components/TransferStatusDialog.vue";
-import HotSearchSection from "./components/HotSearchSection.vue";
+import HotKeywordSection from "./components/HotKeywordSection.vue";
+import CuratedResourceSection from "./components/CuratedResourceSection.vue";
 import NoticeModal from "./components/NoticeModal.vue";
-import ErrorBoundary from "./components/ErrorBoundary.vue";
 import { API_BASE } from "./config";
 import { useSearch } from "./composables/useSearch";
 import { useAnnouncement } from "./composables/useAnnouncement";
 import { useToast } from "./composables/useToast";
 import { useDarkMode } from "./composables/useDarkMode";
+import { useHotKeywords } from "./composables/useHotKeywords";
 import { platformInfo } from "./config/platforms";
 import { checkSearchAuth, forceVerify, isVerified } from "./api/auth";
 import { orderDriverGroups } from "./utils/driverPriority";
@@ -263,29 +269,14 @@ const {
 const { toast } = useToast();
 const { init: initDarkMode } = useDarkMode();
 
-// 热搜组件引用（词云自己拉 /api/hot-searches，与官方站同源）
-const hotSearchRef = ref<InstanceType<typeof HotSearchSection> | null>(null);
+// 推荐词表（后台固定词表，与热词区块共用一次请求）
+const { keywords: hotKeywords, ensureLoaded: ensureHotKeywords } = useHotKeywords();
+// 空状态推荐词：取词表前 5 个（官方站 2026-09-23 口径，替代已下线的热搜统计）
+const emptySuggestions = computed(() => hotKeywords.value.slice(0, 5));
 
-// 空状态「大家都在搜」推荐词
-const hotTerms = ref<string[]>([]);
-
-/**
- * 统一拉一次热搜（limit=25）：前 5 个给空状态推荐词，整份喂给词云，
- * 省掉词云组件自己那次请求；拉不到就交给词云内部兜底请求。
- */
-async function fetchHotTerms() {
-  try {
-    const res = await fetch(`${API_BASE}/hot-searches?limit=25`);
-    const data = await res.json();
-    if (data.code === 0 && data.data?.hotSearches) {
-      const list = data.data.hotSearches;
-      hotTerms.value = list.map((s: any) => s.term).slice(0, 5);
-      hotSearchRef.value?.setData(list);
-      return;
-    }
-  } catch {}
-  hotSearchRef.value?.init();
-}
+// 站点 logo（与 index.html 的 favicon 同源）
+const LOGO_URL =
+  "https://cdn.jsdmirror.com/gh/wu529778790/img.shenzjd.com@master/blog/imgx-20260828-151509-5bk7.svg";
 
 const announcementIndex = ref(0);
 let rotateTimer: ReturnType<typeof setInterval> | null = null;
@@ -446,8 +437,8 @@ function sortedItems(items: MergedLink[]): MergedLink[] {
 onMounted(async () => {
   // 暗色模式：跟随系统主题实时变化（首屏由 index.html 阻塞脚本即时应用）
   initDarkMode();
-  // 热搜（词云 + 空状态推荐词）：只在挂载时拉一次
-  void fetchHotTerms();
+  // 推荐词表（热词区块 + 空状态推荐词共用）：只在挂载时拉一次
+  void ensureHotKeywords();
   // 窗口尺寸变化时重新判定公告是否需要滚动
   window.addEventListener("resize", onResize);
 
@@ -623,138 +614,56 @@ onBeforeUnmount(() => {
   gap: 24px;
 }
 
-/* ===== 英雄区 ===== */
-.hero-row {
-  display: flex;
-  align-items: stretch;
-  position: relative;
-  background: linear-gradient(145deg, rgba(15, 118, 110, 0.12) 0%, rgba(15, 118, 110, 0.04) 35%, rgba(245, 158, 11, 0.06) 70%, rgba(15, 118, 110, 0.08) 100%);
-  border-radius: 20px;
-  box-shadow: 0 4px 20px -4px rgba(15, 118, 110, 0.15);
-  overflow: hidden;
-}
-.hero-noise {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.04;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  mix-blend-mode: overlay;
-  z-index: 0;
-}
+/* ===== 品牌区（对齐官方站）：居中、无卡片无底色。一行「logo + 站名」48px 高，
+   下面一句描述；不加渐变底/阴影/圆角——越干净越像搜索站的首屏 ===== */
 .hero {
-  flex: 1;
-  min-width: 0;
-  padding: 24px 28px;
-  position: relative;
-  z-index: 1;
-}
-.hero-accent {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 6px;
-  height: 100%;
-  background: linear-gradient(180deg, var(--primary) 0%, var(--secondary) 50%, var(--primary) 100%);
-}
-.hero-content {
-  position: relative;
-  z-index: 2;
-  padding-left: 12px;
-}
-.hero-badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--primary);
-  margin-bottom: 10px;
-  padding: 6px 12px;
-  background: rgba(15, 118, 110, 0.12);
-  border: 1px solid rgba(15, 118, 110, 0.25);
-  border-radius: 8px;
-}
-.hero-title {
-  font-size: 36px;
-  font-weight: 800;
-  margin: 0 0 10px;
-  color: var(--text-primary);
-  letter-spacing: -0.04em;
-  line-height: 1.1;
-  max-width: 560px;
-}
-.hero-title-line {
-  display: block;
-}
-.hero-title-line--accent {
-  background: linear-gradient(120deg, var(--primary) 0%, #0d9488 40%, var(--secondary) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.hero-description {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin: 0 0 16px;
-  line-height: 1.65;
-  max-width: 520px;
-}
-.hero-features {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-}
-.hero-feature {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--primary-dark);
-  padding: 6px 12px;
-  background: var(--bg-input);
-  border: 1px solid rgba(15, 118, 110, 0.2);
-  border-radius: 10px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-.hero-feature:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.15);
-  border-color: rgba(15, 118, 110, 0.35);
-}
-.hero-shape {
-  position: absolute;
-  right: 8%;
-  bottom: 10%;
-  width: 120px;
-  height: 120px;
-  background: linear-gradient(135deg, rgba(15, 118, 110, 0.15) 0%, rgba(245, 158, 11, 0.08) 100%);
-  border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
-  filter: blur(24px);
-  pointer-events: none;
-  z-index: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 0;
+  text-align: center;
 }
 
-/* 热搜词云（英雄区右侧）：嵌入时去掉独立卡片感，跟英雄区融为一体 */
-.hero-aside {
-  flex-shrink: 0;
-  width: 340px;
+.hero-lockup {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
-.hero-aside :deep(.tag-cloud-wrap),
-.hero-aside :deep(.loading-state),
-.hero-aside :deep(.tag-cloud-placeholder) {
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
+
+/* 不写死 border-radius / object-fit:fill：logo 是 512 方形 SVG（自带圆角），
+   一律等比缩放，绝不被容器拉扁 */
+.hero-logo {
+  display: block;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
 }
-.hero-aside :deep(.tag-cloud-wrap) {
-  padding: 12px 16px;
-  min-height: 260px;
+
+.hero-brand {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-primary);
 }
-.hero-aside :deep(.hot-tagcloud) {
-  height: 240px !important;
+
+.hero-tagline {
+  margin: 0;
+  /* 860px：整句约 57 字，宽屏一行放得下；窄屏自然折成两行（居中，不显突兀） */
+  max-width: 860px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+/* 分隔符间距由 margin 给（模板里 span 之间不留换行，见模板块注释） */
+.hero-tagline__sep {
+  margin: 0 6px;
+  opacity: 0.65;
 }
 /* ===== 统计栏 ===== */
 .stats-bar {
@@ -1078,12 +987,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
-  .hero-row {
-    flex-direction: column;
-  }
-  .hero-aside {
-    width: 100%;
-  }
   .main {
     padding: 16px;
   }
@@ -1094,17 +997,15 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
-  .hero-aside {
+  .hero-logo {
+    width: 40px;
+    height: 40px;
+  }
+  .hero-brand {
+    font-size: 24px;
+  }
+  .hero-tagline__platforms {
     display: none;
-  }
-  .hero {
-    padding: 24px 18px;
-  }
-  .hero-content {
-    padding-left: 4px;
-  }
-  .hero-title {
-    font-size: 26px;
   }
   .stats-bar {
     padding: 12px;
