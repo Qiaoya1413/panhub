@@ -27,8 +27,8 @@
                原分享链接，绕过「获取」流程。统一后无任何直跳路径。 -->
           <span
             class="resource-link"
-            :class="{ 'resource-link--dead': linkStatus(r) === 'bad' }"
-            :title="linkStatus(r) === 'bad' ? '该资源已失效' : '点击立即获取'"
+            :class="{ 'resource-link--suspect': linkStatus(r) === 'bad' }"
+            :title="linkStatus(r) === 'bad' ? '该资源疑似失效，仍可点击尝试' : '点击立即获取'"
             @click="handleGet(r)">
             <span class="link-text">{{ r.note || "网盘资源" }}</span>
           </span>
@@ -55,12 +55,12 @@
               </span>
 
               <!-- 服务端探活结果角标（异步懒查，不阻塞渲染） -->
-              <span v-if="linkStatus(r) === 'bad'" class="meta-tag dead">
+              <span v-if="linkStatus(r) === 'bad'" class="meta-tag suspect">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
-                已失效
+                疑似失效
               </span>
             </div>
 
@@ -68,7 +68,9 @@
               class="transfer-btn"
               :class="{
                 'transfer-btn--loading': getStatus(r) === 'loading',
-                'transfer-btn--dead': getStatus(r) === 'dead' || linkStatus(r) === 'bad',
+                'transfer-btn--dead': getStatus(r) === 'dead',
+                'transfer-btn--suspect':
+                  linkStatus(r) === 'bad' && getStatus(r) === 'idle',
                 'transfer-btn--done': getStatus(r) === 'done',
               }"
               :disabled="isTransferBtnDisabled(r)"
@@ -140,39 +142,46 @@ function getStatus(r: MergedLink) {
 
 /**
  * 禁用条件：
- * - 探活已判失效（check 侧 bad）→ 直接禁用，从源头拦住「点了才失败」。
- *   探活是异步懒查、只查当前可见项，结果回来前按钮仍可点（固有竞态，无法归零）。
- * - 自身 loading/dead，或全局有其它「获取」在跑（done 本地复制除外）
+ * - 服务端确认失效（transfer 返回 dead）→ 禁用。这是**权威结论**，不是猜测。
+ * - 探活判 bad **不再禁用**：探活只是「可能失效」的猜测，拦下来的代价是用户
+ *   彻底失去这个资源（页面已无任何直链出口，他连自己试一下都做不到），而放开
+ *   的代价只是「点一下、拿到一句失效提示」——成本算反了。误判也确有前科
+ *   （16% 判活的链接一碰就死；还修过 locked 大面积误报）。所以改为弱提示 +
+ *   可点，让真实转存去给结论：真死会在点后置 dead（自动收敛成权威禁用），
+ *   误判则当场被纠正。
+ * - 自身 loading，或全局有其它「获取」在跑（done 本地复制除外）。
+ *   探活是异步懒查、只查当前可见项，结果回来前按钮本就可点（固有竞态）。
  */
 function isTransferBtnDisabled(r: MergedLink): boolean {
-  if (linkStatus(r) === "bad") return true;
   const st = getStatus(r);
   return st === "loading" || st === "dead" || (transferBusy.value && st !== "done");
 }
 
 /** 按钮文案：默认动作统一叫「立即获取」（与小程序端一致，不区分盘型） */
 function transferBtnLabel(r: MergedLink): string {
-  if (linkStatus(r) === "bad") return "已失效";
   const st = getStatus(r);
   if (st === "loading") return "获取中…";
   if (st === "done") return "已获取";
   if (st === "dead") return "已失效";
+  // 疑似失效：文案保留"可以点"的语义，不用「已失效」这种结论式措辞
+  if (linkStatus(r) === "bad") return "仍要试试";
   return transferBusy.value ? "排队中…" : "立即获取";
 }
 
 function btnTitle(r: MergedLink): string {
-  if (linkStatus(r) === "bad" || getStatus(r) === "dead") return "该资源已失效，无法获取";
+  if (getStatus(r) === "dead") return "该资源已失效，无法获取";
   const st = getStatus(r);
   if (st === "done") return "点击查看并复制获取的内容";
   if (st === "loading") return "正在获取";
   if (transferBusy.value) return "正在获取其他资源，请稍候";
+  if (linkStatus(r) === "bad") return "系统探测该资源可能已失效，仍可点击尝试获取";
   return "立即获取资源";
 }
 
 async function handleGet(r: MergedLink) {
-  // 所有条目统一可点，点标题与点「获取」按钮走同一入口。探活判失效时同样拦下，
-  // 避免绕过按钮的 disabled。
-  if (linkStatus(r) === "bad") return;
+  // 所有条目统一可点，点标题与点「获取」按钮走同一入口。
+  // 疑似失效（探活 bad）不再拦——它只是猜测，交给 requestTransfer 用真实转存
+  // 确认；已确认失效（dead）由 useTransfer 内部兜底提示，不发请求。
   await requestTransfer({ tid: r.tid, url: r.url, name: r.note });
 }
 
@@ -405,23 +414,27 @@ function formatDate(d?: string) {
   stroke: currentColor;
 }
 
-/* 服务端探活判失效的角标 */
-.meta-tag.dead {
-  background: rgba(239, 68, 68, 0.1);
-  border-color: rgba(239, 68, 68, 0.25);
-  color: #ef4444;
+/* 疑似失效角标（琥珀=提示，不是结论）。
+   原为红色「已失效」，探活降级为弱提示后一并换色降调——
+   红色是"确定坏了"的语义，而这里我们只知道"可能坏了"。 */
+.meta-tag.suspect {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #b45309;
 }
 
-/* 失效链接：删除线 + 弱化，且不可点（点击=获取） */
-.resource-link--dead {
+/* 疑似失效链接：保留删除线做提示，但**可点**（点击=获取）。
+   与服务端确认失效的 .transfer-btn--dead 区分：那一档是权威结论，仍硬拦。 */
+.resource-link--suspect {
   text-decoration: line-through;
-  text-decoration-color: #ef4444;
+  text-decoration-color: rgba(239, 68, 68, 0.5);
   text-decoration-thickness: 1.5px;
-  opacity: 0.6;
-  cursor: not-allowed;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
-.resource-link--dead:hover {
-  color: inherit;
+/* 可点的手势要有可点的反馈：hover 回到 primary，不再是"灰着不动" */
+.resource-link--suspect:hover {
+  color: var(--primary-dark);
 }
 
 .transfer-btn {
@@ -472,6 +485,19 @@ function formatDate(d?: string) {
   border-color: var(--border-light);
   color: #999;
   transform: none;
+}
+
+/* 疑似失效态：与 dead 的关键差别是**可点**——
+   只把颜色压暗做提示，不加删除线、不改 not-allowed，hover 仍有正常反馈。 */
+.transfer-btn--suspect {
+  color: var(--text-secondary);
+  border-color: var(--border-medium);
+  background: transparent;
+}
+.transfer-btn--suspect:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: rgba(15, 118, 110, 0.1);
 }
 
 .spin {
