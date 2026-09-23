@@ -14,9 +14,21 @@ export const API_BASE = "https://panhub.shenzjd.com/api";
 /** wx-auth 公共登录服务（登录态唯一签发方） */
 export const WX_AUTH_API_BASE = "https://wx-auth.shenzjd.com";
 
-/** wx-auth-sdk UMD 包（全局单例 window.WxAuth） */
-export const WX_AUTH_SDK_URL =
-  "https://unpkg.com/wx-auth-sdk/dist/wx-auth.umd.js";
+/**
+ * wx-auth-sdk UMD 包（全局单例 window.WxAuth）的 CDN 候选列表。
+ *
+ * 容灾（对齐官方站 2026-09-20）：unpkg 主源、jsdelivr 备源——服务器在海外，
+ * 约七成用户在中国，unpkg 一旦不可达（TCP 黑洞时 onerror/onload 都不触发），
+ * 认证弹窗这条硬门槛会直接不可用。按列表顺序尝试，单个失败/超时立即切下一个。
+ * 两个源都不带版本号（= 跟随 latest），SDK 发新版仍无需改本仓库。
+ */
+export const WX_AUTH_SDK_URLS: readonly string[] = [
+  "https://unpkg.com/wx-auth-sdk/dist/wx-auth.umd.js",
+  "https://cdn.jsdelivr.net/npm/wx-auth-sdk/dist/wx-auth.umd.js",
+];
+
+/** 主源（旧配置名保留：app 内动态补插兜底仍先试主源） */
+export const WX_AUTH_SDK_URL = WX_AUTH_SDK_URLS[0];
 
 export const SITE_NAME = "PanHub";
 

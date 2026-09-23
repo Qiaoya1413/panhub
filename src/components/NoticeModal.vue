@@ -1,11 +1,11 @@
 <template>
-  <!-- 弹窗公告：与顶部公告条相互独立，用于群聊二维码等强提示场景。
-       版本号写死在组件内，点「我知道了」后按版本记入 LocalStorage，之后不再提示；
-       改文案/换图时升级版本号即可重新展示。
-       部署方如需替换文案与二维码，直接传 props 覆盖即可。 -->
+  <!-- 弹窗公告（接口化，对齐官方站 2026-09-21）：内容全部来自官方站后台「弹窗公告」，
+       组件内不再有任何写死的文案/图片。返回 enabled=false（后台关闭，或既没正文
+       也没图片）时不渲染任何东西。点「我知道了」/ 关闭 / 点遮罩后按版本记
+       LocalStorage，同一版本不再提示；后台改内容会让版本号 +1，用户重新看到一次 -->
   <Teleport to="body">
     <div v-if="visible" class="nm-mask" @click.self="dismiss">
-      <div class="nm-modal" role="dialog" aria-modal="true" aria-label="站内公告">
+      <div class="nm-modal" role="dialog" aria-modal="true" :aria-label="title || '公告'">
         <button class="nm-close" type="button" aria-label="关闭" title="关闭" @click="dismiss">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -13,71 +13,103 @@
           </svg>
         </button>
 
-        <h3 class="nm-title">{{ title }}</h3>
+        <h3 v-if="title" class="nm-title">{{ title }}</h3>
 
-        <p class="nm-text">{{ text }}</p>
+        <p v-if="text" class="nm-text">{{ text }}</p>
 
-        <div v-if="qrSrc && !qrFailed" class="nm-qr">
-          <img :src="qrSrc" alt="群聊二维码" loading="lazy" @error="onQrError" />
+        <a
+          v-if="imageUrl && !imageFailed && link"
+          class="nm-figure nm-figure--link"
+          :href="link"
+          target="_blank"
+          rel="noopener">
+          <img :src="imageUrl" :alt="imageHint || title || '公告图片'" loading="lazy" @error="onImageError" />
+        </a>
+        <div v-else-if="imageUrl && !imageFailed" class="nm-figure">
+          <img :src="imageUrl" :alt="imageHint || title || '公告图片'" loading="lazy" @error="onImageError" />
         </div>
-        <p v-if="qrSrc" class="nm-hint">扫码加入群聊</p>
 
-        <button class="nm-btn" type="button" @click="dismiss">我知道了</button>
+        <p v-if="imageHint && imageUrl && !imageFailed" class="nm-hint">{{ imageHint }}</p>
+
+        <button class="nm-btn" type="button" @click="dismiss">{{ buttonText }}</button>
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+/**
+ * 弹窗公告（接口化）
+ *
+ * 全部字段来自 GET /api/notice-popup（官方站后台「弹窗公告」在线编辑）：
+ *   { enabled, version, title, text, imageUrl, imageHint, link, buttonText }
+ *
+ * 已读语义：按版本号记 LocalStorage（panhub:notice-popup-dismissed:vN）。
+ * 版本号由服务端在内容变化时 +1，所以"改内容 → 老用户重新看到一次"是自动的。
+ */
+import { onBeforeUnmount, onMounted, ref } from "vue";
+import { apiGet } from "../api/client";
 
-// 版本号：每次修改本弹窗内容（文案/图片）时 +1，
-// 已点过「我知道了」的老用户会因 key 变化重新看到一次
-const NOTICE_VERSION = 1;
-const NOTICE_KEY = `panhub:notice-popup-dismissed:v${NOTICE_VERSION}`;
+const DISMISS_KEY_PREFIX = "panhub:notice-popup-dismissed:v";
+/** 稍作延迟，避免首屏打开时立刻被弹窗抢焦点 */
+const SHOW_DELAY_MS = 800;
 
-const props = withDefaults(
-  defineProps<{
-    title?: string;
-    /** 公告正文。留空则不弹（部署方不配就不打扰用户） */
-    text?: string;
-    /** 留空则不展示二维码（纯文字公告） */
-    qrSrc?: string;
-  }>(),
-  {
-    title: "公告",
-    text: "",
-    qrSrc: "",
-  }
-);
-
-const qrSrc = computed(() => props.qrSrc);
+const title = ref("");
+const text = ref("");
+const imageUrl = ref("");
+const imageHint = ref("");
+const link = ref("");
+const buttonText = ref("我知道了");
+/** 当前配置的版本号（关闭时用它写已读标记） */
+const currentVersion = ref<number | null>(null);
 
 const visible = ref(false);
-const qrFailed = ref(false);
+/** 图片加载失败 → 隐藏图片区（连同说明文字），文字部分照常展示 */
+const imageFailed = ref(false);
+let showTimer: ReturnType<typeof setTimeout> | null = null;
 
-onMounted(() => {
-  // 未配置任何内容 → 不弹（第三方部署方默认无公告）
-  if (!props.text && !props.qrSrc) return;
+function onImageError() {
+  imageFailed.value = true;
+}
+
+onMounted(async () => {
+  let data: any = null;
   try {
-    if (localStorage.getItem(NOTICE_KEY)) return;
+    const res = await apiGet<{ code: number; data: any }>("/notice-popup");
+    if (res?.code === 0) data = res.data;
+  } catch {
+    return; // 接口异常：静默不弹，绝不影响页面
+  }
+  if (!data?.enabled) return;
+
+  title.value = data.title || "";
+  text.value = data.text || "";
+  imageUrl.value = data.imageUrl || "";
+  imageHint.value = data.imageHint || "";
+  link.value = data.link || "";
+  buttonText.value = data.buttonText || "我知道了";
+  currentVersion.value = Number(data.version) || 0;
+
+  try {
+    if (localStorage.getItem(`${DISMISS_KEY_PREFIX}${currentVersion.value}`)) return;
   } catch {}
-  // 稍作延迟，避免首屏打开时立刻被弹窗抢焦点
-  setTimeout(() => {
+
+  showTimer = setTimeout(() => {
     visible.value = true;
-  }, 800);
+  }, SHOW_DELAY_MS);
+});
+
+onBeforeUnmount(() => {
+  if (showTimer) clearTimeout(showTimer);
 });
 
 function dismiss() {
   visible.value = false;
+  if (currentVersion.value === null) return;
   try {
-    localStorage.setItem(NOTICE_KEY, "1");
+    // 只记当前版本：后台升版本后老用户会重新看到一次
+    localStorage.setItem(`${DISMISS_KEY_PREFIX}${currentVersion.value}`, "1");
   } catch {}
-}
-
-// 图片挂了就把二维码区域藏起来，弹窗文字照常展示
-function onQrError() {
-  qrFailed.value = true;
 }
 </script>
 
@@ -146,14 +178,22 @@ function onQrError() {
   white-space: pre-line;
 }
 
-.nm-qr {
+/* 图片区：图片内容由后台任意配置 */
+.nm-figure {
   display: inline-block;
   padding: 8px;
   border-radius: var(--radius-md, 12px);
   border: 1px solid var(--border-light, #e5e7eb);
   background: var(--bg-secondary, #f9fafb);
 }
-.nm-qr img {
+.nm-figure--link {
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.nm-figure--link:hover {
+  opacity: 0.88;
+}
+.nm-figure img {
   display: block;
   width: 200px;
   max-width: 100%;

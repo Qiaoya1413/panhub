@@ -14,7 +14,7 @@
  * 登录流程与主站完全一致：关注公众号 + 验证码（或小程序扫码），强制不可跳过。
  */
 import { ref, watch } from "vue";
-import { WX_AUTH_API_BASE, WX_AUTH_SDK_URL } from "../config";
+import { WX_AUTH_API_BASE, WX_AUTH_SDK_URLS } from "../config";
 
 export interface WxAuthUser {
   openid?: string;
@@ -50,13 +50,16 @@ const TOKEN_COOKIE = "wxauth-token";
 let sdkPromise: Promise<WxAuthSDK> | null = null;
 
 /**
- * 等待 UMD 全局单例就绪；脚本缺失时自行补插（1.5s 后仍未挂载）。
+ * 等待 UMD 全局单例就绪；脚本缺失时自行按 CDN 列表补插（1.5s 后仍未挂载，
+ * 依次尝试 unpkg → jsdelivr，单个源 6s 无响应切下一个）。
  * 加载失败抛出异常，调用方决定降级行为，下次调用可重试。
  */
 export function resolveWxAuth(timeoutMs = 10000): Promise<WxAuthSDK> {
   if (sdkPromise) return sdkPromise;
   sdkPromise = new Promise<WxAuthSDK>((resolve, reject) => {
     const startedAt = Date.now();
+    /** CDN 补插进度：index.html 引导脚本加载失败后，这里从下一个源继续 */
+    let fallbackIdx = 0;
     const poll = () => {
       if (window.WxAuth) return resolve(window.WxAuth);
       if (Date.now() - startedAt >= timeoutMs) {
@@ -65,11 +68,12 @@ export function resolveWxAuth(timeoutMs = 10000): Promise<WxAuthSDK> {
       }
       if (
         Date.now() - startedAt >= 1500 &&
-        !document.getElementById(SDK_SCRIPT_ID)
+        !document.getElementById(SDK_SCRIPT_ID) &&
+        fallbackIdx < WX_AUTH_SDK_URLS.length
       ) {
         const el = document.createElement("script");
         el.id = SDK_SCRIPT_ID;
-        el.src = WX_AUTH_SDK_URL;
+        el.src = WX_AUTH_SDK_URLS[fallbackIdx++];
         document.head.appendChild(el);
       }
       setTimeout(poll, 50);

@@ -203,7 +203,7 @@
 
     <!-- 「获取」等待/复制弹窗（含积分不足看广告、限流、回退等全部状态） -->
     <TransferStatusDialog />
-    <!-- 弹窗公告：未传 text/qr-src 时自动不弹，部署方按需配置 -->
+    <!-- 弹窗公告：内容来自官方站后台配置（/api/notice-popup），关闭时自动不弹 -->
     <NoticeModal />
   </div>
 
