@@ -18,7 +18,7 @@
  */
 import { computed, ref } from "vue";
 import { ApiError, apiPost } from "../api/client";
-import { appNameOf, buildShareText } from "../utils/shareText";
+import { buildShareText, driverOf } from "../utils/shareText";
 
 export type TransferStatus = "idle" | "loading" | "done" | "dead";
 
@@ -26,6 +26,34 @@ export type TransferStatus = "idle" | "loading" | "done" | "dead";
 const statusMap = ref<Record<string, TransferStatus>>({});
 /** key → 已生成的口令文本（done 后再点不再请求后端） */
 const shareTextCache = ref<Record<string, string>>({});
+
+/**
+ * 交付的结构化信息（2026-09-21）：弹窗要现场出「资源二维码」，需要裸
+ * share_url + passcode + 盘型，而 shareTextCache 里存的是整段中文口令
+ * （做出来是一张密到扫不动的码），故单独缓存一份原始字段。
+ */
+type ShareDelivery = {
+  url: string;
+  passcode: string;
+  name: string;
+  driver: string;
+};
+const shareDeliveryCache = ref<Record<string, ShareDelivery>>({});
+
+/** 记录一次交付（url 为空则不记，调用方按「没有码」处理） */
+function rememberDelivery(key: string, data: any, url: string): void {
+  const link = String(url || "").trim();
+  if (!link) return;
+  shareDeliveryCache.value[key] = {
+    url: link,
+    passcode: String(data?.passcode || ""),
+    name: String(data?.name || ""),
+    // 后端下发的 driver 是权威值（"other" 表示未接入转存的盘型）；
+    // 早期路径没有该字段时按链接域名兜底
+    driver: String(data?.driver || driverOf(link) || ""),
+  };
+}
+
 /** key → 失效原因（dead 后再点直接展示） */
 const deadMsgCache = ref<Record<string, string>>({});
 /** 底部 toast（限流/忙等轻提示） */
@@ -55,13 +83,14 @@ async function ensureMinLoading(startedAt: number): Promise<void> {
   if (remain > 0) await new Promise((r) => setTimeout(r, remain));
 }
 
-// —— 内置等待/复制弹窗（components/TransferStatusDialog.vue）——
-// 交互：点击「获取」即弹「正在获取」；成功后不自动复制，弹窗内出现「复制」按钮；
-// 用户点复制才写入剪贴板，弹窗保持打开（二维码还在，可扫码移动端保存），手动关闭。
+// —— 内置等待/资源弹窗（components/TransferStatusDialog.vue）——
+// 交互（2026-09-21 改版，PC 转移动端）：点击「获取」即弹「正在获取」；
+// 拿到资源后不再给「复制」主按钮，改为直接摊开资源本身——桌面端出**资源二维码**
+// （扫码用对应网盘 APP 打开，走移动端保存），手机端给**可直接点开的资源地址** +
+// 行内复制按钮。成功后不自动关，由用户手动关闭。
 type TransferDialogStatus =
   | "loading"
   | "ready"
-  | "copied"
   | "dead"
   | "fallback"
   | "limited"
@@ -72,7 +101,7 @@ const dialogStatus = ref<TransferDialogStatus>("loading");
 const dialogMsg = ref("");
 const dialogKey = ref("");
 
-/** 打开弹窗：ready=false → 「正在获取」；ready=true → 直接「复制」态 */
+/** 打开弹窗：ready=false → 「正在获取」；ready=true → 直接资源态 */
 function openTransferDialog(key: string, ready = false): void {
   dialogKey.value = key;
   dialogStatus.value = ready ? "ready" : "loading";
@@ -84,53 +113,25 @@ function closeTransferDialog(): void {
   dialogOpen.value = false;
 }
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // 兜底：非安全上下文 / 权限被拒时用 execCommand
-    try {
-      const el = document.createElement("textarea");
-      el.value = text;
-      el.style.position = "fixed";
-      el.style.opacity = "0";
-      document.body.appendChild(el);
-      el.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(el);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-}
-
-/** 弹窗内「复制」按钮：真正写剪贴板，状态就地转「已复制」，弹窗不自动关 */
-async function copyFromDialog(): Promise<boolean> {
-  const text = shareTextCache.value[dialogKey.value];
-  if (!text) return false;
-  const copied = await copyText(text);
-  const app = appNameOf(text);
-  dialogStatus.value = "copied";
-  dialogMsg.value = copied ? `已复制，请打开${app}APP粘贴保存` : "复制失败，请重试一次";
-  return copied;
-}
-
-/** 弹窗内失败态：展示原因，弹窗仍由用户手动关闭 */
+/** 弹窗内失败/失效态：展示原因，弹窗仍由用户手动关闭 */
 function failTransferDialog(msg: string, status: TransferDialogStatus = "error"): void {
   dialogStatus.value = status;
   dialogMsg.value = msg;
 }
+
+/** 当前弹窗条目的结构化交付信息（二维码视图用）；没有交付过则为 null */
+const dialogDelivery = computed<ShareDelivery | null>(
+  () => shareDeliveryCache.value[dialogKey.value] || null
+);
 
 /** 弹窗视图层绑定：components/TransferStatusDialog.vue 使用 */
 export function useTransferDialog() {
   return {
     dialogOpen,
     dialogStatus,
+    dialogDelivery,
     dialogMsg,
     closeTransferDialog,
-    copyFromDialog,
   };
 }
 
@@ -149,8 +150,9 @@ export function useTransfer() {
 
   /**
    * 点击「获取」——所有条目统一入口：前端不区分哪些盘型接了转存。
-   * 有 tid → 真实转存（后端按链接分派）；没有 tid → 传 url，后端交付原链接并计费。
+   * 有 tid → 真实转存（后端按链接分派）；没有 tid → 传 url，后端交付原链接。
    * 两者都**必须**经过 /api/transfer：前端没有任何「本地直接给链接」的快捷路径。
+   * 「复制」按钮已下线，「获取」是唯一动作。
    */
   async function requestTransfer(item: {
     tid?: string;
@@ -161,6 +163,7 @@ export function useTransfer() {
     if (!key) return;
     const current = statusOf(key);
 
+    // 已成功过（done）：不再请求后端，弹窗直接进资源态
     if (current === "done" && shareTextCache.value[key]) {
       openTransferDialog(key, true);
       return;
@@ -186,10 +189,9 @@ export function useTransfer() {
     };
 
     try {
-      // 一律走后端换链接（2026-09-16 口径）：有 tid → 服务端按注册表换回原链接
-      // 再转存；没有 tid（正版合规源 / 旧缓存数据）→ 把 url 一并交给服务端，
-      // 由它统一交付原链接。
-      // 前端不再有「没有 tid 就在本地转个圈、直接复制原链接」的旁路。
+      // 一律走后端换链接：有 tid → 服务端按注册表换回原链接再转存；
+      // 没有 tid（正版合规源 / 旧缓存数据）→ 把 url 一并交给服务端，
+      // 由它统一交付原链接。前端没有任何本地旁路。
       let shareText = item.url;
       try {
         const resp = await apiPost<{ code: number; data: any }>("/transfer", item.tid
@@ -229,20 +231,34 @@ export function useTransfer() {
               ? resp.data.message
               : "未能获取到新链接，已为你准备原始链接";
           const origin = resp.data.share_url || item.url;
-          if (origin) shareTextCache.value[key] = origin;
+          if (origin) {
+            // 兜底也是交付（2026-09-21 用户反馈）：复制给用户的必须是**口令文本**，
+            // 裸 URL 粘进各盘 APP 没反应（APP 靠剪贴板识别口令）——同时留一份结构化
+            // 数据，桌面端 fallback 也照常出资源二维码
+            shareTextCache.value[key] = buildShareText({ ...resp.data, share_url: origin });
+            rememberDelivery(key, resp.data, origin);
+          }
           statusMap.value[key] = "idle";
           await ensureMinLoading(startedAt);
           failTransferDialog(msg, origin ? "fallback" : "error");
           return;
         }
 
-        // ④ 成功：拼官方口令
+        // ④ 成功：拼官方口令 + 结构化字段单独留一份给二维码
         if (resp.code === 0 && resp.data?.share_url) {
           shareText = buildShareText(resp.data);
+          rememberDelivery(key, resp.data, resp.data.share_url);
         }
       } catch (e) {
-        // HTTP 错误（配额/tid 过期等）：后端响应里带原链接则兜底
-        if (e instanceof ApiError && e.data?.url) shareText = e.data.url;
+        // HTTP 错误（配额/tid 过期等）：后端响应里带原链接则兜底。
+        // 两道过滤：必须是 http(s)、且不含 /api/（接口路径不会是资源链接）。
+        const raw = e instanceof ApiError ? String(e.data?.url || "") : "";
+        const candidate = /^https?:\/\//i.test(raw) && !raw.includes("/api/") ? raw : "";
+        shareText = shareText || candidate;
+        // 兜底交付的同样是「能打开的链接」，也要留结构化数据——否则资源面板拿不到
+        // 链接，获取成功了却渲染成空视图（不论盘型、不论走哪条交付路径，
+        // 只要有链接就摊开地址/二维码）
+        if (shareText) rememberDelivery(key, e instanceof ApiError ? e.data || {} : {}, shareText);
       }
 
       // 兜底也没拿到链接（tid 过期/未登录，且直链已被剥离）：不能假装获取成功
