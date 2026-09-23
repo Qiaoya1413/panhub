@@ -77,7 +77,7 @@
           </span>
           <span class="stat-item">
             <span class="stat-label">用时</span>
-            <span class="stat-value">{{ elapsedMs }}ms</span>
+            <span class="stat-value">{{ elapsedSeconds }}s</span>
           </span>
           <span v-if="deepLoading && !paused" class="loading-indicator">
             <span class="pulse-dot"></span>
@@ -254,6 +254,10 @@ const {
   pauseSearch,
   resetSearch,
 } = useSearch();
+
+// 用时展示：毫秒数是给开发看的，用户只关心「几秒」。
+// 保留一位小数（如 7.5s）——整数会把 1~2 秒档位压成同一个数字，看不出差别。
+const elapsedSeconds = computed(() => (elapsedMs.value / 1000).toFixed(1));
 
 const {
   items: announcementItems,
