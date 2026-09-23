@@ -78,10 +78,6 @@
         @pause="pauseSearch"
         @continue="handleContinueSearch" />
 
-      <!-- 积分入口：本站签到是「进页自动签」，页面上没有可点的领分动作，
-           这里给一条明确路径（小程序「我的」页签到） -->
-      <PointsEntry />
-
       <!-- 统计 + 平台过滤 -->
       <div v-if="searched" class="stats-bar">
         <div class="stats-main">
@@ -222,7 +218,6 @@ import SearchBox from "./components/SearchBox.vue";
 import ResultGroup from "./components/ResultGroup.vue";
 import DoubanHot from "./components/DoubanHot.vue";
 import TransferStatusDialog from "./components/TransferStatusDialog.vue";
-import PointsEntry from "./components/PointsEntry.vue";
 import HotSearchSection from "./components/HotSearchSection.vue";
 import NoticeModal from "./components/NoticeModal.vue";
 import ErrorBoundary from "./components/ErrorBoundary.vue";
@@ -231,7 +226,6 @@ import { useSearch } from "./composables/useSearch";
 import { useAnnouncement } from "./composables/useAnnouncement";
 import { useToast } from "./composables/useToast";
 import { useDarkMode } from "./composables/useDarkMode";
-import { usePoints } from "./composables/usePoints";
 import { platformInfo } from "./config/platforms";
 import { checkSearchAuth, forceVerify, isVerified } from "./api/auth";
 import { orderDriverGroups } from "./utils/driverPriority";
@@ -292,18 +286,6 @@ async function fetchHotTerms() {
   } catch {}
   hotSearchRef.value?.init();
 }
-
-// 每日积分签到：认证通过后自动签到一次（分值是账本参数，前端不写死数字）。
-// 必须等 isVerified 置位再调——未登录时调只会拿到 401，纯浪费请求。
-// 状态是模块级单例（usePoints），积分入口条读的是同一份余额。
-const { ensureDailyCheckin } = usePoints();
-watch(
-  isVerified,
-  (v) => {
-    if (v) void ensureDailyCheckin();
-  },
-  { immediate: true }
-);
 
 const announcementIndex = ref(0);
 let rotateTimer: ReturnType<typeof setInterval> | null = null;

@@ -17,18 +17,11 @@
             <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
             <line x1="12" y1="18" x2="12.01" y2="18"></line>
           </svg>
-          {{
-            dialogMode === "transfer"
-              ? dialogStatus === "insufficient"
-                ? "看个广告 · 继续获取"
-                : "微信扫码 · 移动端更方便"
-              : "帮帮小水管服务器吧"
-          }}
+          微信扫码 · 移动端更方便
         </h3>
 
         <!-- 转存模式：正在获取 → 复制按钮 → 已复制 / 未获取到 / 限流 / 失效 / 失败 -->
-        <template v-if="dialogMode === 'transfer'">
-          <div v-if="dialogStatus === 'loading'" class="tsd-status">
+        <div v-if="dialogStatus === 'loading'" class="tsd-status">
             <svg class="tsd-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
             </svg>
@@ -40,7 +33,6 @@
             <p class="tsd-status-title">获取成功</p>
             <button class="tsd-copy-btn" type="button" @click="copyFromDialog">复制</button>
             <p class="tsd-sub">点击复制，然后打开网盘APP粘贴保存</p>
-            <p v-if="dialogPointsTip" class="tsd-sub tsd-sub--points">{{ dialogPointsTip }}</p>
           </div>
 
           <div v-else-if="dialogStatus === 'copied'" class="tsd-status">
@@ -51,50 +43,6 @@
               已复制
             </p>
             <p class="tsd-sub">{{ dialogMsg }}</p>
-            <p v-if="dialogPointsTip" class="tsd-sub tsd-sub--points">{{ dialogPointsTip }}</p>
-          </div>
-
-          <!-- 积分不足：就地弹一张按当前用户签发的动态小程序码，扫码看激励视频 →
-               账号加积分 → 前端轮询到核销后自动重试本次获取 -->
-          <div v-else-if="dialogStatus === 'insufficient'" class="tsd-status">
-            <template v-if="adQrState === 'redeemed'">
-              <p class="tsd-status-title tsd-status-title--ok">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                已获得积分
-              </p>
-              <p class="tsd-sub">正在继续获取，请稍候…</p>
-            </template>
-            <template v-else>
-              <p class="tsd-status-title tsd-status-title--fail">{{ dialogMsg }}</p>
-              <p v-if="dialogPointsTip" class="tsd-sub tsd-sub--points">{{ dialogPointsTip }}</p>
-
-              <div class="tsd-adqr">
-                <img
-                  v-if="adQrState === 'ready' && adQrDataUrl"
-                  :src="adQrDataUrl"
-                  alt="看广告赚积分的小程序码"
-                />
-                <div v-else-if="adQrState === 'loading'" class="tsd-adqr-box">
-                  <svg class="tsd-spin" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-                  </svg>
-                  <span>正在生成小程序码…</span>
-                </div>
-                <div v-else class="tsd-adqr-box tsd-adqr-box--err">
-                  <span>{{ adQrMsg || "小程序码暂时生成不了" }}</span>
-                </div>
-              </div>
-
-              <p class="tsd-sub">
-                {{
-                  adQrState === "expired"
-                    ? "二维码已过期，关闭弹窗后重新点「立即获取」即可"
-                    : "微信扫码 → 看完视频 → 自动继续获取"
-                }}
-              </p>
-            </template>
           </div>
 
           <!-- 未获取到新链接（风控/容量等）：给中性原因，原链接仍可复制 -->
@@ -114,23 +62,12 @@
             <p class="tsd-status-title tsd-status-title--fail">{{ dialogMsg || "获取失败，请稍后再试" }}</p>
             <p v-if="dialogStatus === 'dead'" class="tsd-sub">该资源已失效</p>
           </div>
-        </template>
 
-        <!-- 纯提醒模式：无获取动作 -->
-        <template v-else>
-          <div class="tsd-status">
-            <p class="tsd-sub">积分不够了？扫码看广告就能补充</p>
-          </div>
-        </template>
-
-        <!-- 静态二维码：积分不足态上方已有动态小程序码，这里不重复展示。
-             部署方可传 qr-src 换成自己的小程序码/公众号码 -->
-        <template v-if="dialogStatus !== 'insufficient'">
-          <div class="tsd-qr">
-            <img :src="qr" alt="微信小程序二维码" loading="lazy" />
-          </div>
-          <p class="tsd-hint">扫码看广告，获取积分</p>
-        </template>
+        <!-- 静态二维码：部署方可传 qr-src 换成自己的小程序码/公众号码 -->
+        <div class="tsd-qr">
+          <img :src="qr" alt="微信小程序二维码" loading="lazy" />
+        </div>
+        <p class="tsd-hint">扫码看广告，获取积分</p>
       </div>
     </div>
   </Teleport>
@@ -155,13 +92,8 @@ const qr = computed(() => props.qrSrc);
 
 const {
   dialogOpen,
-  dialogMode,
   dialogStatus,
   dialogMsg,
-  dialogPointsTip,
-  adQrDataUrl,
-  adQrState,
-  adQrMsg,
   closeTransferDialog,
   copyFromDialog,
 } = useTransferDialog();
@@ -345,48 +277,6 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   border: 1px solid var(--border-light, rgba(17, 24, 39, 0.08));
   object-fit: cover;
-}
-
-/* 积分信息行（当前积分 · 本次需要 / 已扣 N 积分 · 余额 N） */
-.tsd-sub--points {
-  font-size: 12px;
-  color: var(--text-tertiary, #9ca3af);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 动态小程序码（按当前用户签发的看广告票据，与静态引流码不同） */
-.tsd-adqr {
-  display: flex;
-  justify-content: center;
-  margin: 6px 0 2px;
-}
-.tsd-adqr img {
-  width: 200px;
-  height: 200px;
-  border-radius: 10px;
-  border: 1px solid var(--border-light, rgba(17, 24, 39, 0.08));
-  object-fit: cover;
-  background: #fff;
-}
-.tsd-adqr-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 200px;
-  height: 200px;
-  padding: 12px;
-  text-align: center;
-  border: 1px dashed var(--border-light, rgba(17, 24, 39, 0.16));
-  border-radius: 10px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-tertiary, #9ca3af);
-}
-.tsd-adqr-box--err {
-  border-style: solid;
-  color: var(--text-secondary, #6b7280);
 }
 
 .tsd-hint {

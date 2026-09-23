@@ -11,16 +11,14 @@
  *
  * 响应分支（服务端 2026-09 起的完整协议，缺一不可）：
  * - code 1 + dead            → 确定性失效，禁用该条目
- * - code 0 + insufficient    → 积分不足，就地弹小程序码看广告赚分后自动重试
  * - code 0 + limited         → 当日该盘型获取达上限
  * - code 0 + fallback        → 未拿到新链接，中性原因 + 原链接仍可复制
- * - code 0 + share_url       → 成功（可能带 points 扣分回执）
- * - 无 tid                   → 把 url 交给后端，由服务端交付原链接并同样计费
+ * - code 0 + share_url       → 成功
+ * - 无 tid                   → 把 url 交给后端，由服务端统一交付原链接
  */
 import { computed, ref } from "vue";
-import { ApiError, apiGet, apiPost } from "../api/client";
+import { ApiError, apiPost } from "../api/client";
 import { appNameOf, buildShareText } from "../utils/shareText";
-import { applyPointsBalance, refreshPointsBalance } from "./usePoints";
 
 export type TransferStatus = "idle" | "loading" | "done" | "dead";
 
@@ -47,7 +45,7 @@ const anyBusy = computed(() => busyCount.value > 0);
  * 补足到最短时长，等待期的转圈才是可信的。
  *
  * 只对**会落到弹窗结果态**的路径补齐（成功 / 失效 / 回退 / 无兜底）；
- * 限流与积分不足不补——那两条直接给下一步动作（看广告赚分），让用户白等没有意义。
+ * 限流不补——那一条直接给下一步动作（换网盘/明天再来），让用户白等没有意义。
  */
 const MIN_LOADING_MS = 3000;
 
@@ -59,7 +57,7 @@ async function ensureMinLoading(startedAt: number): Promise<void> {
 
 // —— 内置等待/复制弹窗（components/TransferStatusDialog.vue）——
 // 交互：点击「获取」即弹「正在获取」；成功后不自动复制，弹窗内出现「复制」按钮；
-// 用户点复制才写入剪贴板，弹窗保持打开（二维码还在，可扫码看广告赚积分），手动关闭。
+// 用户点复制才写入剪贴板，弹窗保持打开（二维码还在，可扫码移动端保存），手动关闭。
 type TransferDialogStatus =
   | "loading"
   | "ready"
@@ -67,62 +65,23 @@ type TransferDialogStatus =
   | "dead"
   | "fallback"
   | "limited"
-  | "insufficient"
   | "error";
 
 const dialogOpen = ref(false);
-const dialogMode = ref<"transfer" | "support">("transfer");
 const dialogStatus = ref<TransferDialogStatus>("loading");
 const dialogMsg = ref("");
 const dialogKey = ref("");
-/** 扣分回执（仅本次真的扣了分才有）：成功态里展示「已扣 1 积分，余额 9」 */
-const dialogPointsTip = ref("");
-
-// —— 看广告赚分 ——
-// 「积分不够」时就地弹一张按当前用户签发的小程序码：用户扫码进小程序看激励视频，
-// wx-auth 给账号加积分；前端轮询到「已核销」后自动重试本次获取（此时余额已够扣），
-// 全程用户不用离开当前页面、也不用再点一次按钮。
-const adQrDataUrl = ref("");
-const adQrState = ref<"idle" | "loading" | "ready" | "error" | "redeemed" | "expired">(
-  "idle"
-);
-const adQrMsg = ref("");
-/** 轮询代际：关弹窗/换动作/重试时自增，旧轮询立即作废（防串台） */
-let adPollGen = 0;
-let adPollTimer: ReturnType<typeof setTimeout> | null = null;
-let adPollTicket = "";
-let adPollRetry: (() => void) | null = null;
-
-/** 停止轮询并作废当前代际（关弹窗/开始新动作/拿到结果都要调） */
-function stopAdPolling(): void {
-  adPollGen++;
-  if (adPollTimer) {
-    clearTimeout(adPollTimer);
-    adPollTimer = null;
-  }
-  adPollTicket = "";
-  adPollRetry = null;
-}
 
 /** 打开弹窗：ready=false → 「正在获取」；ready=true → 直接「复制」态 */
 function openTransferDialog(key: string, ready = false): void {
-  dialogMode.value = "transfer";
   dialogKey.value = key;
   dialogStatus.value = ready ? "ready" : "loading";
   dialogMsg.value = "";
   dialogOpen.value = true;
 }
 
-/** 纯提醒模式（无获取动作）：只展示二维码 */
-export function openSupportDialog(): void {
-  dialogMode.value = "support";
-  dialogOpen.value = true;
-}
-
 function closeTransferDialog(): void {
   dialogOpen.value = false;
-  // 用户主动关掉 = 放弃这次看广告，轮询与自动重试一并作废
-  stopAdPolling();
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -162,21 +121,14 @@ async function copyFromDialog(): Promise<boolean> {
 function failTransferDialog(msg: string, status: TransferDialogStatus = "error"): void {
   dialogStatus.value = status;
   dialogMsg.value = msg;
-  // 失败态一律清掉上一轮的计费回执（积分不足态随后会重设成「当前积分 · 本次需要」）
-  dialogPointsTip.value = "";
 }
 
 /** 弹窗视图层绑定：components/TransferStatusDialog.vue 使用 */
 export function useTransferDialog() {
   return {
     dialogOpen,
-    dialogMode,
     dialogStatus,
     dialogMsg,
-    dialogPointsTip,
-    adQrDataUrl,
-    adQrState,
-    adQrMsg,
     closeTransferDialog,
     copyFromDialog,
   };
@@ -207,7 +159,6 @@ export function useTransfer() {
   }): Promise<void> {
     const key = item.tid || item.url;
     if (!key) return;
-    dialogPointsTip.value = "";
     const current = statusOf(key);
 
     if (current === "done" && shareTextCache.value[key]) {
@@ -237,12 +188,9 @@ export function useTransfer() {
     try {
       // 一律走后端换链接（2026-09-16 口径）：有 tid → 服务端按注册表换回原链接
       // 再转存；没有 tid（正版合规源 / 旧缓存数据）→ 把 url 一并交给服务端，
-      // 由它交付原链接并**同样计费**。
-      // 前端不再有「没有 tid 就在本地转个圈、直接复制原链接」的旁路——那等于
-      // 绕开计费与服务端。
+      // 由它统一交付原链接。
+      // 前端不再有「没有 tid 就在本地转个圈、直接复制原链接」的旁路。
       let shareText = item.url;
-      // 扣分回执（仅在真的扣了分时后端才下发 points 字段）
-      let pointsTip = "";
       try {
         const resp = await apiPost<{ code: number; data: any }>("/transfer", item.tid
           ? { id: item.tid }
@@ -261,27 +209,7 @@ export function useTransfer() {
           return;
         }
 
-        // ② 积分不足：就地弹小程序码，看完广告自动重试本次获取。
-        //    必须放在 limited 之前——积分不足的响应同时带 limited:true（旧端兼容）。
-        if (resp.code === 0 && resp.data?.insufficient) {
-          const p = resp.data.points || {};
-          const reward = Number(p.adReward) || 10;
-          const msg =
-            typeof resp.data.message === "string" && resp.data.message
-              ? resp.data.message
-              : `积分不够了，扫码看个广告（+${reward} 积分）就能继续获取。`;
-          statusMap.value[key] = "idle";
-          failTransferDialog(msg, "insufficient");
-          // 服务端刚读过余额：回写单例，免得弹窗说「当前积分 0」而入口条还显示 1
-          applyPointsBalance(p.balance);
-          dialogPointsTip.value = `当前积分 ${Number(p.balance) || 0} · 本次需要 ${
-            Number(p.amount) || 1
-          } 积分`;
-          void startAdUnlock(() => void requestTransfer(item));
-          return;
-        }
-
-        // ③ 每日限流（按盘型）：当天只停该盘型，提示换网盘或明天再来。
+        // ② 每日限流（按盘型）：当天只停该盘型，提示换网盘或明天再来。
         //    不缓存失败提示（次日重试就有意义，与 dead 不同）
         if (resp.code === 0 && resp.data?.limited) {
           const msg =
@@ -293,7 +221,7 @@ export function useTransfer() {
           return;
         }
 
-        // ④ 未获取到新链接（风控/容量等）：中性原因 + 保留原链接复制入口；
+        // ③ 未获取到新链接（风控/容量等）：中性原因 + 保留原链接复制入口；
         //    状态回 idle，稍后可重试
         if (resp.code === 0 && resp.data?.fallback) {
           const msg =
@@ -308,20 +236,9 @@ export function useTransfer() {
           return;
         }
 
-        // ⑤ 成功：拼官方口令 + 计费回执
+        // ④ 成功：拼官方口令
         if (resp.code === 0 && resp.data?.share_url) {
           shareText = buildShareText(resp.data);
-          const pt = resp.data.points;
-          if (pt) {
-            // 幂等重放时上游给的可能是重放那一刻的快照，不拿它覆盖更新的值
-            if (pt.charged !== "replayed") applyPointsBalance(pt.balance);
-            pointsTip =
-              pt.charged === "unlock"
-                ? "已使用 1 次看广告获得的放行额度"
-                : pt.charged === "replayed"
-                  ? "本次未重复扣分"
-                  : `已扣 ${Number(pt.amount) || 0} 积分 · 余额 ${Number(pt.balance) || 0}`;
-          }
         }
       } catch (e) {
         // HTTP 错误（配额/tid 过期等）：后端响应里带原链接则兜底
@@ -337,7 +254,6 @@ export function useTransfer() {
       }
       shareTextCache.value[key] = shareText;
       statusMap.value[key] = "done";
-      dialogPointsTip.value = pointsTip;
       // 成功同样补足最短 loading：非五盘/缓存命中的交付是毫秒级的，
       // 不补会让弹窗一闪就跳到「获取成功」，用户以为根本没请求
       await ensureMinLoading(startedAt);
@@ -347,96 +263,11 @@ export function useTransfer() {
     }
   }
 
-  /**
-   * 开始「看广告赚分」：出码 → 轮询 → 自动重试。
-   *
-   * 出码走后端 /api/points/ad-qr（服务端用**用户自己的**凭证向 wx-auth 领票），
-   * 前端只负责展示与轮询。轮询代际 adPollGen：关弹窗 / 换动作 / 重试时作废旧轮询，
-   * 避免旧票的状态回来把新弹窗的状态改掉。
-   */
-  async function startAdUnlock(retry: () => void): Promise<void> {
-    stopAdPolling();
-    const gen = adPollGen;
-    adQrDataUrl.value = "";
-    adQrMsg.value = "";
-    adQrState.value = "loading";
-    adPollRetry = retry;
-
-    let qr: any = null;
-    try {
-      qr = await apiPost<any>("/points/ad-qr");
-    } catch (e: any) {
-      // 端点自身用 200 + ok:false 表达业务失败，走到这里说明是网络/网关错误
-      qr = e?.data || null;
-    }
-    if (gen !== adPollGen) return; // 期间用户已关弹窗或开始新动作
-
-    if (!qr?.ok || !qr.qrDataUrl) {
-      adQrState.value = "error";
-      adQrMsg.value =
-        (typeof qr?.message === "string" && qr.message) ||
-        "小程序码生成失败，请稍后再试";
-      return;
-    }
-
-    adQrDataUrl.value = String(qr.qrDataUrl);
-    adQrState.value = "ready";
-    adPollTicket = String(qr.ticket || "");
-    const expiresMs = Math.max(30, Number(qr.expiresIn) || 900) * 1000;
-    scheduleAdPoll(gen, Date.now() + expiresMs);
-  }
-
-  /** 2s 一次轮询票状态（票 15 分钟有效，过期即停并提示重新点获取） */
-  function scheduleAdPoll(gen: number, deadline: number): void {
-    adPollTimer = setTimeout(() => void pollAdTicket(gen, deadline), 2000);
-  }
-
-  async function pollAdTicket(gen: number, deadline: number): Promise<void> {
-    if (gen !== adPollGen) return;
-    if (Date.now() > deadline) {
-      adQrState.value = "expired";
-      return;
-    }
-
-    let r: any = null;
-    try {
-      r = await apiFetchAdStatus(adPollTicket);
-    } catch {
-      r = null; // 查询失败按「还没看完」继续轮询，绝不把抖动当过期
-    }
-    if (gen !== adPollGen) return;
-
-    if (r?.status === "redeemed") {
-      adQrState.value = "redeemed";
-      // 广告核销 = 余额刚变（+N 分）：强刷一次，让入口条立刻显示新积分
-      void refreshPointsBalance(true);
-      const retry = adPollRetry;
-      stopAdPolling();
-      // 积分已到账 → 自动重试本次获取（余额已够扣），用户不用再点一次
-      retry?.();
-      return;
-    }
-    if (r?.status === "expired") {
-      adQrState.value = "expired";
-      return;
-    }
-    scheduleAdPoll(gen, deadline);
-  }
-
   return {
     statusMap,
     toast,
     statusOf,
     requestTransfer,
     anyBusy,
-    startAdUnlock,
   };
-}
-
-/**
- * 票状态查询：票是不可枚举的随机串，服务端本就不鉴权；
- * 这里仍走统一封装（带了 Bearer 也无害），省一套请求代码。
- */
-function apiFetchAdStatus(ticket: string): Promise<any> {
-  return apiGet<any>("/points/ad-status", { ticket });
 }
