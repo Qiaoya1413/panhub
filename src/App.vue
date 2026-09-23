@@ -218,6 +218,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue"
 import SearchBox from "./components/SearchBox.vue";
 import ResultGroup from "./components/ResultGroup.vue";
 import TransferStatusDialog from "./components/TransferStatusDialog.vue";
+import { useTransfer } from "./composables/useTransfer";
 import HotKeywordSection from "./components/HotKeywordSection.vue";
 import CuratedResourceSection from "./components/CuratedResourceSection.vue";
 import NoticeModal from "./components/NoticeModal.vue";
@@ -228,7 +229,7 @@ import { useToast } from "./composables/useToast";
 import { useDarkMode } from "./composables/useDarkMode";
 import { useHotKeywords } from "./composables/useHotKeywords";
 import { platformInfo } from "./config/platforms";
-import { checkSearchAuth, forceVerify, isVerified } from "./api/auth";
+import { forceVerify } from "./api/auth";
 import { orderDriverGroups } from "./utils/driverPriority";
 import type { MergedLink } from "./types";
 
@@ -321,6 +322,13 @@ function onResize() {
 
 // ===== 搜索 =====
 
+// 「获取」401 处理（对齐官方站 2026-09-24）：搜索对访客放开后，登录卡点收敛到
+// 「获取」——401 时直接吊起 wx-auth SDK 登录弹窗（等同手动点登录），
+// forceVerify 在登录成功（isVerified 置位）时返回 true，useTransfer 收到后
+// 自动重试本次获取——全程无需再点一次。模块级注册：ResultGroup 等无参调用
+// 触发的获取同样生效。
+useTransfer(() => forceVerify());
+
 /** 服务端 401：登录态失效 → 强制重新认证后重试 */
 let authRetrying = false;
 async function handleAuthRequired() {
@@ -361,9 +369,9 @@ async function onSearch() {
   if (!kw.value.trim()) return;
   if (paused.value) resetSearch();
   if (loading.value) return;
-  // 强制登录：未登录先完成验证，成功后再继续搜索
-  const authed = await checkSearchAuth();
-  if (!authed) return;
+  // 访客准入（对齐官方站 2026-09-24）：搜索不再强制登录，登录卡点收敛到
+  // 「获取」转存。匿名票据由 useSearch 在建连前自动拼在 URL 上
+  //（getAnonTicketSafe，fail-open：拿不到也照发，服务端按无票访客策略放行）。
   await doSearch();
 }
 

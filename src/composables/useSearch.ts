@@ -14,6 +14,7 @@
 import { computed, ref } from "vue";
 import { MAX_RESULTS_PER_ROUND } from "../config";
 import { apiUrl, authHeaders } from "../api/client";
+import { getAnonTicketSafe } from "../api/auth";
 import type { MergedLinks } from "../types";
 import { countMerged, mergeMergedByType } from "../utils/merge";
 
@@ -113,6 +114,10 @@ export function useSearch() {
 
     const params: Record<string, string | number | undefined> = { kw: keyword };
     if (cat) params.cat = cat;
+    // 匿名票据（对齐官方站 2026-09-24 访客准入）：建连前拼在 URL 上（流式连接
+    // 不能靠 401 重试补票）。拿不到 → 不带，服务端对无票访客按策略放行（fail-open）
+    const anonTicket = await getAnonTicketSafe().catch(() => null);
+    if (anonTicket) params.at = anonTicket;
     if (maxResults != null && maxResults > 0) params.maxResults = maxResults;
     // 断点续跑：回传已完成任务索引，服务端只跑未搜过的
     if (completedTaskGidx.size > 0) {

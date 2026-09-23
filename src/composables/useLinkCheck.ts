@@ -17,6 +17,7 @@
  */
 import { ref } from "vue";
 import { apiPost } from "../api/client";
+import { getAnonTicketSafe } from "../api/auth";
 
 export type LinkCheckStatus =
   | "ok"
@@ -75,6 +76,13 @@ function createStore() {
   const inFlight = new Set<string>();
   let queueTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingQueue: CheckTarget[] = [];
+  // 失败重试（对齐官方站 2026-09-24）：429 频控/网络抖动是暂时的，60s 后自动
+  // 重新入队；每条最多重试 2 次，防止接口持续异常时无限循环（服务端按 URL
+  // 缓存，重试的外呼成本有界）
+  const RETRY_DELAY_MS = 60_000;
+  const MAX_RETRY_PER_TID = 2;
+  const retryCount = new Map<string, number>();
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   function flush() {
     queueTimer = null;
@@ -83,10 +91,20 @@ function createStore() {
     if (batch.length === 0) return;
 
     const items = batch.slice(0, MAX_LINKS_PER_REQUEST);
-    // 标记在途（即使失败也不再重复入队，避免连环重试打爆接口）
+    // 标记在途，防止同批次重复入队
     for (const it of items) inFlight.add(keyOf(it));
 
-    apiPost<CheckResponse>("/check", { items: items.map(payloadOf) })
+    // 匿名票据（对齐官方站 2026-09-24 访客准入）：探活对访客同口径放行
+    //（服务端紧档频控），请求前把票拼在 URL 上；拿不到 → 不带，服务端按无票策略处理
+    const atPromise = getAnonTicketSafe().catch(() => null);
+
+    atPromise
+      .then((at) =>
+        apiPost<CheckResponse>(
+          at ? `/check?at=${encodeURIComponent(at)}` : "/check",
+          { items: items.map(payloadOf) }
+        )
+      )
       .then((res) => {
         const results = res?.data?.results || [];
         if (results.length === 0) return;
@@ -95,11 +113,27 @@ function createStore() {
           const key = r.tid || r.url;
           if (!key) continue;
           next[key] = { key, url: r.url, status: r.status, reason: r.reason };
+          retryCount.delete(key);
         }
         statusMap.value = next;
       })
       .catch(() => {
-        // 静默失败：角标不显示，不影响搜索体验
+        // 静默失败：角标不显示，不影响搜索体验。
+        // 延迟重新入队（限次数）：被频控/网络抖动的批次角标缺失只是暂时的
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          for (const it of items) {
+            const key = keyOf(it);
+            if (statusMap.value[key] || inFlight.has(key)) continue;
+            const count = retryCount.get(key) || 0;
+            if (count >= MAX_RETRY_PER_TID) continue;
+            retryCount.set(key, count + 1);
+            pendingQueue.push(it);
+          }
+          if (pendingQueue.length > 0 && !queueTimer) {
+            queueTimer = setTimeout(flush, 50);
+          }
+        }, RETRY_DELAY_MS);
       })
       .finally(() => {
         for (const it of items) inFlight.delete(keyOf(it));
