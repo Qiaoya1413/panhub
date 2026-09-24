@@ -18,15 +18,6 @@
 - **零运维**：纯静态页面，构建产物丢到任意静态托管即可运行
 - **多端部署**：GitHub Pages（内置 CI）/ Cloudflare Pages / Vercel / Docker
 
-## 🚀 快速开始
-
-```bash
-npm install
-npm run dev      # 本地开发 http://localhost:4001
-npm run build    # 产出 dist/（纯静态）
-npm run preview  # 本地预览构建产物
-```
-
 ## ⚡ 一键部署
 
 最快方式：点 README 顶部的 **Deploy with Vercel** / **Deploy to Cloudflare** 按钮，
