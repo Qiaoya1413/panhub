@@ -24,10 +24,13 @@ PanHub 的搜索与「获取」接口对外开放，任何第三方页面/应用
 
 ## 2. 鉴权
 
-### 2.1 为什么必须登录
+### 2.1 鉴权口径
 
-搜索与「获取」接口**恒强制登录**（服务端写死，无开关）。
-登录方式与 PanHub 官网一致：关注公众号 + 验证码，或小程序扫码。
+- **搜索 / 探活**：对访客开放。第三方页面用 wx-auth-sdk（≥1.2.44）的
+  `getOrCreateAnonTicket()` 取一张匿名票据，拼在请求 URL `?at=` 上即可；
+  拿不到票据也照发（服务端对无票请求有独立策略，不承诺放行）。
+- **「获取」（转存）**：强制登录，Bearer token 必带。
+- 登录方式：关注公众号 + 验证码，或小程序扫码。
 
 ### 2.2 拿 token
 
@@ -68,23 +71,19 @@ Authorization: Bearer <wxauth-token>
 
 ## 3. 接口清单
 
-| 接口 | 方法 | 鉴权 | 用途 | 本仓库使用 |
+| 接口 | 方法 | 鉴权 | 用途 | 本站使用 |
 |---|---|---|---|---|
-| `/api/search.stream` | GET (SSE) | ✅ Bearer | **搜索主通道**，边搜边出 | ✅ |
-| `/api/search` | GET | ✅ Bearer | 搜索（非流式 / 批次模式） | — |
+| `/api/search.stream` | GET (SSE) | 访客票 `?at=` / Bearer | **搜索主通道**，边搜边出 | ✅ |
+| `/api/search` | GET | 同上 | 搜索（非流式 / 批次模式） | — |
 | `/api/transfer` | POST | ✅ Bearer | **「获取」换取分享链接** | ✅ |
-| `/api/points/balance` | GET | ✅ Bearer | 积分余额 / 今日签到状态 | ✅ |
-| `/api/points/checkin` | POST | ✅ Bearer | 每日签到（幂等） | ✅ |
-| `/api/points/ad-qr` | POST | ✅ Bearer | 看广告赚分 · 出码 | ✅ |
-| `/api/points/ad-status` | GET | ❌ | 看广告赚分 · 票据状态 | ✅ |
-| `/api/check` | POST | ❌ | 链接探活（失效 / 需密码） | ✅ |
-| `/api/hot-searches` | GET | ❌ | 热搜词 | — |
-| `/api/douban-hot` | GET | ❌ | 豆瓣影视榜单 | ✅ |
+| `/api/check` | POST | 访客票 `?at=` | 链接探活（疑似失效弱提示） | ✅ |
+| `/api/hot-keywords` | GET | ❌ | 推荐关键词词表 | ✅ |
+| `/api/curated-resources` | GET | ❌ | 精选资源清单 | ✅ |
 | `/api/announcement` | GET | ❌ | 站点公告 | ✅ |
-| `/api/img` | GET | ❌ | 图片代理（豆瓣封面） | ✅ |
+| `/api/notice-popup` | GET | ❌ | 弹窗公告 | ✅ |
 | `/api/health` | GET | ❌ | 健康检查 | — |
 
-> 「本仓库使用」一列标注了官方静态前台实际调用的接口；其余接口依然对外开放，
+> 「本站使用」一列标注了 PanHub 站点实际调用的接口；其余接口依然对外开放，
 > 接入方按需自取。
 
 ---
@@ -98,6 +97,7 @@ SSE 长连接承载整个搜索，服务端边搜边推送增量结果。
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `kw` | ✅ | 搜索关键词，最长 200 字符 |
+| `at` | | 匿名票据（wx-auth-sdk `getOrCreateAnonTicket()`，访客准入） |
 | `cat` | | 类别过滤：`quark` / `baidu` / `xunlei` / `uc` / `mobile` / `tianyi` / `aliyun` / `115` / `123` |
 | `maxResults` | | 本轮目标结果数上限（默认 90）。「继续搜索」时传「已收数量 + 90」 |
 | `skipTasks` | | 断点续跑：已完成的内部任务索引，逗号分隔 |
@@ -139,7 +139,7 @@ data: {"total":126,"warnings":[],"pluginCount":8,"merged":{...},"completedIndice
 
 ## 5. 搜索（非流式）：`GET /api/search`
 
-> 官方静态前台**未使用**该接口（只用 SSE 主通道），此处保留给需要
+> PanHub 站点**未使用**该接口（只用 SSE 主通道），此处保留给需要
 > 「一次请求拿到完整结果」或需要自行控制分批节奏的接入方。
 
 常用作流式不可用时的回退方案。
@@ -179,8 +179,9 @@ data: {"total":126,"warnings":[],"pluginCount":8,"merged":{...},"completedIndice
 ```
 
 无 `tid` 时后端**不转存**（避免成为「替任何人转存任意链接」的代理），只把原链接
-原样交付回来 —— 但**照样计费**。所以接入方不要自行展示/缓存原链接来绕过这个接口：
-原链接交付与转存交付对用户是同一回事，对账本也是同一回事。
+原样交付回来。所以接入方不要自行展示/缓存原链接来绕过这个接口：
+原链接交付与转存交付对用户是同一回事。请求体可带 `at`（匿名票据，登录用户
+顺手携带即可，用于服务端侧的设备维度风控）。
 
 ### 成功响应
 

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "PanHub 纯静态前台 · 可部署到任意静态托管，直连 panhub 官方 API",
+  "description": "PanHub · 全网网盘聚合搜索",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
