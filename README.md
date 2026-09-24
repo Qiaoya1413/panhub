@@ -4,6 +4,9 @@
 
 **在线体验**：<https://panhub.shenzjd.com>
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fwu529778790%2Fpanhub.shenzjd.com)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fwu529778790%2Fpanhub.shenzjd.com)
+
 ## ✨ 核心特性
 
 - **多源聚合**：Telegram 频道 + 第三方插件，聚合去重、智能排序
@@ -25,6 +28,10 @@ npm run preview  # 本地预览构建产物
 ```
 
 ## ⚡ 一键部署
+
+最快方式：点 README 顶部的 **Deploy with Vercel** / **Deploy to Cloudflare** 按钮，
+授权 GitHub 仓库后一路下一步即可（两平台都会自动识别 Vite 工程：
+构建命令 `npm run build`、输出目录 `dist`，无需任何配置）。
 
 ### GitHub Pages（本仓库已内置自动部署）
 
