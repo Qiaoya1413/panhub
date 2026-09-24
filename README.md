@@ -38,8 +38,8 @@
 
 | 平台 | 设置 |
 |------|------|
-| Cloudflare Pages | 构建命令 `npm run build`，输出目录 `dist` |
-| Vercel | 框架预设选 `Vite`，构建命令 `npm run build`，输出目录 `dist` |
+| Cloudflare | 点顶部按钮一键部署（仓库已内置 `wrangler.jsonc`）；或构建后 `npx wrangler deploy` |
+| Vercel | 点顶部按钮一键部署，或框架预设选 `Vite`、构建命令 `npm run build`、输出目录 `dist` |
 | Docker | 见下一节（仓库已内置 Dockerfile） |
 | 任意静态托管 | 本地 `npm run build` 后，把 `dist/` 整个目录上传 |
 
